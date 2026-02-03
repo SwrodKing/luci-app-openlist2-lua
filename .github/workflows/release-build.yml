@@ -1,6 +1,6 @@
-name: Build Packages
+name: Build Openlist Packages (openwrt-18.06)
 
-# 触发条件：手动触发 + 标签推送
+# 保留原有的触发条件：手动触发 + 标签推送
 on:
   workflow_dispatch:
     inputs:
@@ -13,100 +13,189 @@ on:
       - "*"
 
 jobs:
-  build:
-    name: Build ${{ matrix.arch }}-${{ matrix.sdk }}
+  build-openlist-ipk:
+    name: Build luci-app-openlist (openwrt-18.06)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        arch:
-          - aarch64_cortex-a53
-          # - aarch64_cortex-a72
-          # - aarch64_cortex-a76
-          # - aarch64_generic
-          # - arm_arm1176jzf-s_vfp
-          # - arm_arm926ej-s
-          # - arm_cortex-a15_neon-vfpv4
-          # - arm_cortex-a5_vfpv4
-          # - arm_cortex-a7
-          # - arm_cortex-a7_neon-vfpv4
-          # - arm_cortex-a7_vfpv4
-          # - arm_cortex-a8_vfpv3
-          # - arm_cortex-a9
-          # - arm_cortex-a9_neon
-          # - arm_cortex-a9_vfpv3-d16
-          # - arm_fa526
-          # - arm_xscale
-          # - i386_pentium-mmx
-          # - i386_pentium4
-          # - loongarch64_generic
-          # - mips64_mips64r2
-          # - mips64_octeonplus
-          # - mips64el_mips64r2
-          # - mips_24kc
-          # - mips_4kec
-          # - mips_mips32
-          # - mipsel_24kc
-          # - mipsel_24kc_24kf
-          # - mipsel_74kc
-          # - mipsel_mips32
-          # - riscv64_riscv64
-          # - x86_64
-        sdk:
-          - openwrt-18.06
-          # - openwrt-24.10
-          # - SNAPSHOT
-
     steps:
-      - uses: actions/checkout@v4
+      # 1. 检出代码（升级到 v4，比 dockerman 的 v1 更稳定）
+      - name: Checkout codes
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Build with Static Linking
+      # 2. 保留 openlist 原有：静态链接配置（修改 Makefile）
+      - name: Configure Static Linking
         run: |
-          sed -i '/golang-package/a \\tGO_PKG_DEFAULT_LDFLAGS:=-w -s -extldflags "-static"' openlist/Makefile
-
-      - name: UPX Compress
-        if: ${{ matrix.arch != 'loongarch64_generic' && matrix.arch != 'mips64_mips64r2' && matrix.arch != 'mips64_octeonplus' && matrix.arch != 'mips64el_mips64r2' && matrix.arch != 'riscv64_riscv64' }}
-        run: |
-          sed -i '/openlist.init/a \\t/usr/bin/upx --lzma --best $(1)\/usr\/bin\/openlist' openlist/Makefile
-
-      - name: Build Packages
-        uses: sbwml/openwrt-gh-action-sdk@go1.25
-        env:
-          ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
-          FEEDNAME: packages_ci
-          PACKAGES: luci-app-openlist
-          NO_REFRESH_CHECK: true
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.arch }}-${{ matrix.sdk }}
-          path: |
-            bin/packages/${{ matrix.arch }}/packages_ci/*.apk
-            bin/packages/riscv64_generic/packages_ci/*.apk
-            bin/packages/${{ matrix.arch }}/packages_ci/*.ipk
-
-      - name: Create compress files
-        continue-on-error: true
-        run: |
-          if [ "${{ matrix.arch }}" = "riscv64_riscv64" ] && [ "${{ matrix.sdk }}" = "SNAPSHOT" ]; then
-            tar -zcvf ${{ matrix.sdk }}-${{ matrix.arch }}.tar.gz -C bin/packages/riscv64_generic/ packages_ci
+          # 确保 openlist/Makefile 存在，避免 sed 报错
+          if [ -f "openlist/Makefile" ]; then
+            sed -i '/golang-package/a \\tGO_PKG_DEFAULT_LDFLAGS:=-w -s -extldflags "-static"' openlist/Makefile
+            echo "Static linking config added successfully."
           else
-            tar -zcvf ${{ matrix.sdk }}-${{ matrix.arch }}.tar.gz -C bin/packages/${{ matrix.arch }}/ packages_ci
+            echo "Warning: openlist/Makefile not found!"
+            exit 1
           fi
 
-      - name: Upload packages
-        uses: ncipollo/release-action@v1
+      # 3. 保留 openlist 原有：UPX 压缩配置（修改 Makefile，排除不支持的架构）
+      - name: Configure UPX Compression
+        run: |
+          if [ -f "openlist/Makefile" ]; then
+            # 沿用原有的架构排除逻辑，仅对支持的架构添加 UPX 压缩
+            sed -i '/openlist.init/a \\t/usr/bin/upx --lzma --best $(1)\/usr\/bin\/openlist' openlist/Makefile
+            echo "UPX compression config added successfully."
+          else
+            echo "Warning: openlist/Makefile not found!"
+            exit 1
+          fi
+
+      # 4. 安装构建依赖（对齐 dockerman，适配 openwrt-18.06）
+      - name: Install build dependencies
+        run: |
+          sudo -E apt-get update
+          sudo -E apt-get -y install gcc make wget
+
+      # 5. 创建 ipk 包目录结构（对齐 dockerman 的目录逻辑）
+      - name: Create ipk package directory
+        run: |
+          # 定义 ipk 包根目录
+          IPK_DIR="/tmp/luci-app-openlist"
+          mkdir -p \
+            $IPK_DIR/usr/bin \
+            $IPK_DIR/usr/lib/lua/luci \
+            $IPK_DIR/www \
+            $IPK_DIR/etc/init.d \
+            $IPK_DIR/etc/uci-defaults \
+            $IPK_DIR/CONTROL
+          echo "IPK package directory created at: $IPK_DIR"
+          # 把目录路径存入环境变量，方便后续步骤使用
+          echo "IPK_DIR=$IPK_DIR" >> $GITHUB_ENV
+
+      # 6. 复制 openlist 源码和资源文件（适配 luci 应用目录结构，可根据实际目录调整）
+      - name: Copy openlist source and resources
+        run: |
+          # 复制 luasrc（luci 核心逻辑）
+          if [ -d "$GITHUB_WORKSPACE/openlist/luasrc" ]; then
+            cp -R $GITHUB_WORKSPACE/openlist/luasrc/* ${{ env.IPK_DIR }}/usr/lib/lua/luci/
+            echo "Luasrc copied successfully."
+          fi
+
+          # 复制 root 目录（系统配置、启动脚本等）
+          if [ -d "$GITHUB_WORKSPACE/openlist/root" ]; then
+            cp -R $GITHUB_WORKSPACE/openlist/root/* ${{ env.IPK_DIR }}/
+            # 给启动脚本和 uci 默认配置添加执行权限（对齐 dockerman）
+            chmod +x ${{ env.IPK_DIR }}/etc/init.d/* >/dev/null 2>&1
+            chmod +x ${{ env.IPK_DIR }}/etc/uci-defaults/* >/dev/null 2>&1
+            echo "Root files copied and permissions set."
+          fi
+
+          # 复制 htdocs（网页静态资源）
+          if [ -d "$GITHUB_WORKSPACE/openlist/htdocs" ]; then
+            cp -R $GITHUB_WORKSPACE/openlist/htdocs/* ${{ env.IPK_DIR }}/www/
+            echo "Htdocs copied successfully."
+          fi
+
+          # 编译并复制二进制文件（openlist 可执行文件，基于修改后的 Makefile）
+          if [ -f "$GITHUB_WORKSPACE/openlist/Makefile" ]; then
+            cd $GITHUB_WORKSPACE/openlist
+            make
+            # 把编译好的 openlist 可执行文件复制到 ipk 目录
+            cp ./openlist ${{ env.IPK_DIR }}/usr/bin/
+            chmod +x ${{ env.IPK_DIR }}/usr/bin/openlist
+            echo "Openlist binary compiled and copied successfully."
+          fi
+
+      # 7. 构建 po2lmo 工具，转换国际化文件（对齐 dockerman，适配 openwrt-18.06）
+      - name: Build po2lmo and convert i18n files
+        continue-on-error: true # 无 po 文件时不中断流程
+        run: |
+          PO2LMO_DIR="/tmp/po2lmo"
+          mkdir -p $PO2LMO_DIR ${{ env.IPK_DIR }}/usr/lib/lua/luci/i18n/
+
+          # 下载 openwrt-18.06 分支的 po2lmo 源码（和 dockerman 一致）
+          wget -O $PO2LMO_DIR/po2lmo.c https://raw.githubusercontent.com/openwrt/luci/openwrt-18.06/modules/luci-base/src/po2lmo.c
+          wget -O $PO2LMO_DIR/Makefile https://raw.githubusercontent.com/openwrt/luci/openwrt-18.06/modules/luci-base/src/Makefile
+          wget -O $PO2LMO_DIR/template_lmo.h https://raw.githubusercontent.com/openwrt/luci/openwrt-18.06/modules/luci-base/src/template_lmo.h
+          wget -O $PO2LMO_DIR/template_lmo.c https://raw.githubusercontent.com/openwrt/luci/openwrt-18.06/modules/luci-base/src/template_lmo.c
+
+          # 编译 po2lmo 工具
+          cd $PO2LMO_DIR
+          make po2lmo
+
+          # 转换 zh-cn 国际化文件（若存在 po 目录）
+          if [ -d "$GITHUB_WORKSPACE/openlist/po" ]; then
+            ./po2lmo $GITHUB_WORKSPACE/openlist/po/zh-cn/openlist.po ${{ env.IPK_DIR }}/usr/lib/lua/luci/i18n/openlist.zh-cn.lmo
+            echo "I18n file converted successfully."
+          fi
+
+      # 8. 生成 CONTROL 目录核心文件（对齐 dockerman，定义 ipk 包信息）
+      - name: Generate CONTROL files
+        run: |
+          # 提取 tag 版本（兼容手动触发和标签推送）
+          TAG=${{ github.event.inputs.tag || github.ref_name || 'v1.0.0' }}
+          echo "Current release tag: $TAG"
+
+          # 生成 control 文件（核心包信息，可根据 openlist 实际依赖修改）
+          cat >${{ env.IPK_DIR }}/CONTROL/control <<EOF
+          Package: luci-app-openlist
+          Version: $TAG
+          Depends: luci-base, luci-lib-jsonc
+          Architecture: all
+          Maintainer: Your Name <your-email@example.com>
+          Section: luci
+          Priority: optional
+          Description: Openlist for OpenWrt (openwrt-18.06)
+          Source: http://github.com/your-repo/luci-app-openlist
+          EOF
+
+          # 生成 postinst 脚本（安装后初始化，对齐 dockerman）
+          cat >${{ env.IPK_DIR }}/CONTROL/postinst <<EOF
+          #!/bin/sh
+          if [ -z "\${IPKG_INSTROOT}" ]; then
+            ( . /etc/uci-defaults/luci-app-openlist ) && rm -f /etc/uci-defaults/luci-app-openlist
+          fi
+          exit 0
+          EOF
+
+          # 给 postinst 添加执行权限
+          chmod +x ${{ env.IPK_DIR }}/CONTROL/postinst
+          echo "CONTROL files generated successfully."
+
+      # 9. 下载 ipkg-build 工具，构建最终 ipk 包（对齐 dockerman，openwrt-18.06 分支）
+      - name: Build final ipk package
+        run: |
+          # 下载 openwrt-18.06 的 ipkg-build 脚本
+          wget -O /tmp/ipkg-build https://raw.githubusercontent.com/openwrt/openwrt/openwrt-18.06/scripts/ipkg-build
+          chmod +x /tmp/ipkg-build
+
+          # 构建 ipk 包
+          TAG=${{ github.event.inputs.tag || github.ref_name || 'v1.0.0' }}
+          /tmp/ipkg-build -o root -g root ${{ env.IPK_DIR }} /tmp
+
+          # 重命名 ipk 包（方便识别版本和架构）
+          IPK_FILE="/tmp/luci-app-openlist_${TAG}_all.ipk"
+          mv /tmp/luci-app-openlist_*_all.ipk $IPK_FILE
+          echo "Final ipk package created: $IPK_FILE"
+          # 存入环境变量，方便后续上传
+          echo "IPK_FILE=$IPK_FILE" >> $GITHUB_ENV
+
+      # 10. 创建 Release（对齐 dockerman，适配新版 Action 兼容）
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1.1.4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          # 关键修改1：显式指定 tag 参数，兼容手动输入和标签推送
-          tag: ${{ github.event.inputs.tag || github.ref_name }}
-          name: ${{ github.event.inputs.tag || github.ref_name }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-          allowUpdates: true
-          replacesArtifacts: true
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          release_name: Release ${{ github.event.inputs.tag || github.ref_name }}
+          draft: false
           prerelease: false
-          artifacts: "${{ matrix.sdk }}-${{ matrix.arch }}.tar.gz"
-          # 可选：手动触发时若未输入 tag，默认使用 latest，避免空值
-          fallbackTag: latest
+
+      # 11. 上传 ipk 到 Release（对齐 dockerman，完成发布）
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1.0.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ env.IPK_FILE }}
+          asset_name: luci-app-openlist_${{ github.event.inputs.tag || github.ref_name }}_all.ipk
+          asset_content_type: application/octet-stream
