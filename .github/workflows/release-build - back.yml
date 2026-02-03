@@ -53,8 +53,8 @@ jobs:
           # - riscv64_riscv64
           # - x86_64
         sdk:
-          - openwrt-18.06
-          # - openwrt-24.10
+          # - openwrt-18.06
+          - openwrt-24.10
           # - SNAPSHOT
 
     steps:
