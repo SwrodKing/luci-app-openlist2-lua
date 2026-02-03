@@ -1,6 +1,13 @@
 name: Build Packages
 
+# 触发条件：手动触发 + 标签推送
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v1.0.0)'
+        required: false
+        default: 'latest'
   push:
     tags:
       - "*"
@@ -14,40 +21,41 @@ jobs:
       matrix:
         arch:
           - aarch64_cortex-a53
-          - aarch64_cortex-a72
-          - aarch64_cortex-a76
-          - aarch64_generic
-          - arm_arm1176jzf-s_vfp
-          - arm_arm926ej-s
-          - arm_cortex-a15_neon-vfpv4
-          - arm_cortex-a5_vfpv4
-          - arm_cortex-a7
-          - arm_cortex-a7_neon-vfpv4
-          - arm_cortex-a7_vfpv4
-          - arm_cortex-a8_vfpv3
-          - arm_cortex-a9
-          - arm_cortex-a9_neon
-          - arm_cortex-a9_vfpv3-d16
-          - arm_fa526
-          - arm_xscale
-          - i386_pentium-mmx
-          - i386_pentium4
-          - loongarch64_generic
-          - mips64_mips64r2
-          - mips64_octeonplus
-          - mips64el_mips64r2
-          - mips_24kc
-          - mips_4kec
-          - mips_mips32
-          - mipsel_24kc
-          - mipsel_24kc_24kf
-          - mipsel_74kc
-          - mipsel_mips32
-          - riscv64_riscv64
-          - x86_64
+          # - aarch64_cortex-a72
+          # - aarch64_cortex-a76
+          # - aarch64_generic
+          # - arm_arm1176jzf-s_vfp
+          # - arm_arm926ej-s
+          # - arm_cortex-a15_neon-vfpv4
+          # - arm_cortex-a5_vfpv4
+          # - arm_cortex-a7
+          # - arm_cortex-a7_neon-vfpv4
+          # - arm_cortex-a7_vfpv4
+          # - arm_cortex-a8_vfpv3
+          # - arm_cortex-a9
+          # - arm_cortex-a9_neon
+          # - arm_cortex-a9_vfpv3-d16
+          # - arm_fa526
+          # - arm_xscale
+          # - i386_pentium-mmx
+          # - i386_pentium4
+          # - loongarch64_generic
+          # - mips64_mips64r2
+          # - mips64_octeonplus
+          # - mips64el_mips64r2
+          # - mips_24kc
+          # - mips_4kec
+          # - mips_mips32
+          # - mipsel_24kc
+          # - mipsel_24kc_24kf
+          # - mipsel_74kc
+          # - mipsel_mips32
+          # - riscv64_riscv64
+          # - x86_64
         sdk:
-          - openwrt-24.10
-          - SNAPSHOT
+          - openwrt-18.06
+          # - openwrt-24.10
+          # - SNAPSHOT
 
     steps:
       - uses: actions/checkout@v4
@@ -56,19 +64,19 @@ jobs:
 
       - name: Build with Static Linking
         run: |
-          sed -i '/golang-package/a \\tGO_PKG_DEFAULT_LDFLAGS:=-w -s -extldflags "-static"' openlist2/Makefile
+          sed -i '/golang-package/a \\tGO_PKG_DEFAULT_LDFLAGS:=-w -s -extldflags "-static"' openlist/Makefile
 
       - name: UPX Compress
         if: ${{ matrix.arch != 'loongarch64_generic' && matrix.arch != 'mips64_mips64r2' && matrix.arch != 'mips64_octeonplus' && matrix.arch != 'mips64el_mips64r2' && matrix.arch != 'riscv64_riscv64' }}
         run: |
-          sed -i '/openlist2.init/a \\t/usr/bin/upx --lzma --best $(1)\/usr\/bin\/openlist2' openlist2/Makefile
+          sed -i '/openlist.init/a \\t/usr/bin/upx --lzma --best $(1)\/usr\/bin\/openlist' openlist/Makefile
 
       - name: Build Packages
         uses: sbwml/openwrt-gh-action-sdk@go1.25
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
           FEEDNAME: packages_ci
-          PACKAGES: luci-app-openlist2
+          PACKAGES: luci-app-openlist
           NO_REFRESH_CHECK: true
 
       - name: Upload artifacts
@@ -92,9 +100,13 @@ jobs:
       - name: Upload packages
         uses: ncipollo/release-action@v1
         with:
-          name: ${{ github.ref_name }}
+          # 关键修改1：显式指定 tag 参数，兼容手动输入和标签推送
+          tag: ${{ github.event.inputs.tag || github.ref_name }}
+          name: ${{ github.event.inputs.tag || github.ref_name }}
           token: ${{ secrets.GITHUB_TOKEN }}
           allowUpdates: true
           replacesArtifacts: true
           prerelease: false
           artifacts: "${{ matrix.sdk }}-${{ matrix.arch }}.tar.gz"
+          # 可选：手动触发时若未输入 tag，默认使用 latest，避免空值
+          fallbackTag: latest
