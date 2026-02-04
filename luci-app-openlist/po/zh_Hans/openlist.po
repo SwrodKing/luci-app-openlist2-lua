@@ -1,6 +1,3 @@
-msgid "OpenList"
-msgstr "OpenList"
-
 msgid "Open Web Interface"
 msgstr "打开 Web 界面"
 
