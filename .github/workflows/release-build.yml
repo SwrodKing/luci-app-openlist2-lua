@@ -63,9 +63,9 @@ jobs:
           fetch-depth: 0
 
       # 先安装UPX依赖（SDK可能未预装）
-      - name: Install UPX (if needed)
-        run: |
-          sudo apt update && sudo apt install -y upx-ucl
+      # - name: Install UPX (if needed)
+        # run: |
+          # sudo apt update && sudo apt install -y upx-ucl
 
       - name: Build with Static Linking
         run: |
@@ -77,7 +77,8 @@ jobs:
           sed -i '/openlist.init/a \\t/usr/bin/upx --lzma --best $(1)\/usr\/bin\/openlist' openlist/Makefile
 
       - name: Build Packages
-        uses: sbwml/openwrt-gh-action-sdk@go1.26
+        # uses: sbwml/openwrt-gh-action-sdk@go1.26
+        uses: sbwml/openwrt-gh-action-sdk@go1.25
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
           FEEDNAME: packages_ci
