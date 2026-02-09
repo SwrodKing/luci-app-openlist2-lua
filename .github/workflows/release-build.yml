@@ -62,6 +62,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      # 先安装UPX依赖（SDK可能未预装）
+      - name: Install UPX (if needed)
+        run: |
+          sudo apt update && sudo apt install -y upx-ucl
+
       - name: Build with Static Linking
         run: |
           sed -i '/golang-package/a \\tGO_PKG_DEFAULT_LDFLAGS:=-w -s -extldflags "-static"' openlist/Makefile
@@ -72,7 +77,7 @@ jobs:
           sed -i '/openlist.init/a \\t/usr/bin/upx --lzma --best $(1)\/usr\/bin\/openlist' openlist/Makefile
 
       - name: Build Packages
-        uses: sbwml/openwrt-gh-action-sdk@go1.25
+        uses: sbwml/openwrt-gh-action-sdk@go1.26
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
           FEEDNAME: packages_ci
@@ -100,7 +105,7 @@ jobs:
       - name: Upload packages
         uses: ncipollo/release-action@v1
         with:
-          # 关键修改1：显式指定 tag 参数，兼容手动输入和标签推送
+          # 显式指定 tag 参数，兼容手动输入和标签推送
           tag: ${{ github.event.inputs.tag || github.ref_name }}
           name: ${{ github.event.inputs.tag || github.ref_name }}
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -108,5 +113,5 @@ jobs:
           replacesArtifacts: true
           prerelease: false
           artifacts: "${{ matrix.sdk }}-${{ matrix.arch }}.tar.gz"
-          # 可选：手动触发时若未输入 tag，默认使用 latest，避免空值
+          # 手动触发时若未输入 tag，默认使用 latest，避免空值
           fallbackTag: latest
